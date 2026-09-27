@@ -27,6 +27,3 @@ The codebase is fully modularized for O(1) readability and scalable execution:
 * `graphics.py` **(View):** Houses the 2D rendering logic, pitch geometries, and aesthetics.
 * `main.py` **(Controller):** Manages the application state, 11v11 configurations, Matplotlib UI widgets, and mouse event listeners.
 
-```bash
-git clone [https://github.com/yourusername/football-tactical-dashboard.git](https://github.com/yourusername/football-tactical-dashboard.git)
-cd football-tactical-dashboard
