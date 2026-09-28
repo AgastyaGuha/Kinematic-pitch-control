@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RadioButtons
 from physics import compute_tti_and_risk, get_formation
-from graphics import draw_2d_pitch
+from graphics import draw_2d_pitch, render_tactical_overlay
 
 class ProTacticalDashboard:
     def __init__(self):
@@ -14,6 +14,7 @@ class ProTacticalDashboard:
         self.selected_player = None 
         self.drag_threshold = 3.0   
         self.action_mode = 'Drag Player' 
+        self.is_dragging = False 
         
         self.fig = plt.figure(figsize=(14, 8))
         self.fig.patch.set_facecolor('#1e1e1e')
@@ -22,101 +23,100 @@ class ProTacticalDashboard:
         self.ax_mode = plt.axes([0.8, 0.65, 0.15, 0.2], facecolor='#2b2b2b')
         self.ax_mode.set_title("Coaching Tool", color='white', fontweight='bold')
         self.radio_mode = RadioButtons(self.ax_mode, ('Drag Player', 'Draw Pass', 'Draw Shot'), activecolor='#2980b9')
-        
-        for label in self.radio_mode.labels:
-            label.set_color('white')
-            
+        for label in self.radio_mode.labels: label.set_color('white')
         self.radio_mode.on_clicked(self.set_mode)
         
         self.ax_form = plt.axes([0.8, 0.35, 0.15, 0.2], facecolor='#2b2b2b')
         self.ax_form.set_title("Home Formation", color='white', fontweight='bold')
         self.radio_form = RadioButtons(self.ax_form, ('4-3-3', '4-4-2', '4-2-3-1'), activecolor='#ff4d4d')
-        
-        for label in self.radio_form.labels:
-            label.set_color('white')
-            
+        for label in self.radio_form.labels: label.set_color('white')
         self.radio_form.on_clicked(self.set_formation)
 
         self.fig.canvas.mpl_connect('button_press_event', self.on_press)
         self.fig.canvas.mpl_connect('button_release_event', self.on_release)
         self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
         
-        self.update_board()
+        self.update_board(fast_mode=False)
 
     def set_mode(self, label):
         self.action_mode = label
+        if label == 'Draw Shot':
+            self.pass_end = np.array([52.5, 0, 0, 0])
+        self.update_board(fast_mode=False)
         
     def set_formation(self, label):
         self.home_pos = get_formation(label, team='home')
-        self.update_board()
+        self.pass_start = self.home_pos[9]
+        self.update_board(fast_mode=False)
 
-    def update_board(self):
+    def update_board(self, fast_mode=False):
         self.ax_pitch.clear()
         draw_2d_pitch(self.ax_pitch)
         
-        xx, yy, control_grid, lane, def_controls, risk = compute_tti_and_risk(
-            self.home_pos, self.away_pos, self.pass_start, self.pass_end
-        )
-        
-        self.ax_pitch.contourf(xx, yy, control_grid, levels=[-0.5, 0.5, 1.5], colors=['#2980b9', '#c0392b'], alpha=0.4)
-        self.ax_pitch.plot([self.pass_start[0], self.pass_end[0]], [self.pass_start[1], self.pass_end[1]], color='white', linestyle='--', zorder=4)
-        
-        safe_pts, risky_pts = lane[~def_controls], lane[def_controls]
-        if len(safe_pts) > 0:
-            self.ax_pitch.scatter(safe_pts[:,0], safe_pts[:,1], color='#00e676', s=40, zorder=5)
-        if len(risky_pts) > 0:
-            self.ax_pitch.scatter(risky_pts[:,0], risky_pts[:,1], color='#ff1744', marker='X', s=50, zorder=5)
-            
-        self.ax_pitch.scatter(self.home_pos[:,0], self.home_pos[:,1], color='#ff4d4d', s=120, edgecolors='white', lw=1.5, zorder=6)
-        self.ax_pitch.scatter(self.away_pos[:,0], self.away_pos[:,1], color='#3498db', s=120, edgecolors='white', lw=1.5, zorder=6)
-        
-        if self.action_mode == 'Draw Shot':
-            title = f"Expected Block Probability: {risk * 100:.1f}%"
-            self.ax_pitch.plot(52.5, 0, marker='*', color='gold', markersize=15, zorder=7)
+        if fast_mode:
+            render_tactical_overlay(self.ax_pitch, self.action_mode, self.home_pos, self.away_pos, 
+                                    self.pass_start, self.pass_end, fast_mode=True)
         else:
-            title = f"Pass Interception Risk: {risk * 100:.1f}%"
+            v_ball = 25.0 if self.action_mode == 'Draw Shot' else 15.0
             
-        self.ax_pitch.set_title(title, color='white', fontsize=16, fontweight='bold', pad=15)
-        self.fig.canvas.draw()
+            xx, yy, control_grid, lane, def_controls, risk = compute_tti_and_risk(
+                self.home_pos, self.away_pos, self.pass_start, self.pass_end, v_ball=v_ball
+            )
+            render_tactical_overlay(self.ax_pitch, self.action_mode, self.home_pos, self.away_pos, 
+                                    self.pass_start, self.pass_end, xx, yy, control_grid, 
+                                    lane, def_controls, risk, fast_mode=False)
+        
+        self.fig.canvas.draw_idle()
 
     def on_press(self, event):
         if event.inaxes != self.ax_pitch: return
         click_pos = np.array([event.xdata, event.ydata])
         
         if self.action_mode == 'Drag Player':
-            h_dists = np.linalg.norm(self.home_pos - click_pos, axis=1)
+            h_dists = np.linalg.norm(self.home_pos[:, :2] - click_pos, axis=1)
             if np.min(h_dists) < self.drag_threshold:
                 self.selected_player = ('home', np.argmin(h_dists))
+                self.is_dragging = True
                 return
-            a_dists = np.linalg.norm(self.away_pos - click_pos, axis=1)
+            a_dists = np.linalg.norm(self.away_pos[:, :2] - click_pos, axis=1)
             if np.min(a_dists) < self.drag_threshold:
                 self.selected_player = ('away', np.argmin(a_dists))
+                self.is_dragging = True
                 
         elif self.action_mode in ['Draw Pass', 'Draw Shot']:
-            h_dists = np.linalg.norm(self.home_pos - click_pos, axis=1)
-            self.pass_start = self.home_pos[np.argmin(h_dists)]
-            
-            if self.action_mode == 'Draw Shot':
-                self.pass_end = np.array([52.5, 0])
-            else:
-                self.pass_end = click_pos
-            self.update_board()
+            h_dists = np.linalg.norm(self.home_pos[:, :2] - click_pos, axis=1)
+            if np.min(h_dists) < self.drag_threshold:
+                self.pass_start = self.home_pos[np.argmin(h_dists)]
+                
+            if self.action_mode == 'Draw Pass':
+                self.pass_end = np.array([event.xdata, event.ydata, 0.0, 0.0])
+            elif self.action_mode == 'Draw Shot':
+                self.pass_end = np.array([52.5, 0.0, 0.0, 0.0])
+                
+            self.update_board(fast_mode=False)
 
     def on_motion(self, event):
         if event.inaxes != self.ax_pitch: return
         
-        if self.action_mode == 'Drag Player' and self.selected_player:
+        # Allows player dragging
+        if self.action_mode == 'Drag Player' and self.is_dragging and self.selected_player is not None:
             team, idx = self.selected_player
-            if team == 'home': self.home_pos[idx] = [event.xdata, event.ydata]
-            else: self.away_pos[idx] = [event.xdata, event.ydata]
-            self.update_board()
-            
+            if team == 'home': 
+                self.home_pos[idx, 0:2] = [event.xdata, event.ydata]
+            else: 
+                self.away_pos[idx, 0:2] = [event.xdata, event.ydata]
+            self.update_board(fast_mode=True) 
+
+        # Allows dragging the pass line across the pitch dynamically
         elif self.action_mode == 'Draw Pass' and event.button == 1:
-            self.pass_end = np.array([event.xdata, event.ydata])
-            self.update_board()
+            self.pass_end = np.array([event.xdata, event.ydata, 0.0, 0.0])
+            self.update_board(fast_mode=False)
 
     def on_release(self, event):
-        self.selected_player = None
+        if self.is_dragging:
+            self.is_dragging = False
+            self.selected_player = None
+            self.update_board(fast_mode=False)
 
 if __name__ == "__main__":
     dashboard = ProTacticalDashboard()
